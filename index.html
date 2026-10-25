@@ -129,8 +129,8 @@
 
         <div class="card">
             <h2>🛠️ Tool Xử Lý File XLSM — Không nén, tải tất cả một lần</h2>
-            <p class="sub">Tải lên file <b>.xlsm</b> → xuất <b>từng sheet ra CSV</b> + <b>code VBA ra TXT</b> (từng module riêng + 1 file gộp)
-                + <b>file XLSM đã mở khóa VBA</b>. Kết quả là các file riêng lẻ — <b>không đóng gói ZIP</b> — bạn tải từng file hoặc bấm một nút để tải hết.</p>
+            <p class="sub">Tải lên file <b>.xlsm</b> → <b>gộp toàn bộ sheet vào 1 file CSV</b> + <b>gộp toàn bộ code VBA vào 1 file TXT</b>
+                + <b>file XLSM đã mở khóa VBA</b> (vẫn có tùy chọn xuất riêng từng sheet / từng module nếu cần). Kết quả không đóng gói ZIP — tải từng file hoặc bấm một nút để tải hết.</p>
 
             <div class="drop-area" id="dropArea">
                 <span class="big">📁</span>
@@ -140,10 +140,17 @@
             </div>
 
             <div class="options">
-                <label><input type="checkbox" id="optCsv" checked> Xuất sheet → CSV</label>
-                <label><input type="checkbox" id="optVba" checked> Xuất code VBA → TXT (từng module)</label>
-                <label><input type="checkbox" id="optVbaAll" checked> Gộp VBA thành 1 TXT</label>
+                <label><input type="checkbox" id="optCsvAll" checked> <b>Gộp tất cả sheet → 1 file CSV</b></label>
+                <label><input type="checkbox" id="optCsv"> Xuất CSV riêng từng sheet</label>
+                <label><input type="checkbox" id="optVbaAll" checked> <b>Gộp tất cả VBA → 1 file TXT</b></label>
+                <label><input type="checkbox" id="optVba"> Xuất TXT riêng từng module VBA</label>
                 <label><input type="checkbox" id="optUnlock" checked> Tạo XLSM đã mở khóa VBA</label>
+                <label>Cách gộp CSV:
+                    <select id="optCsvMergeMode">
+                        <option value="marker" selected>Chèn dòng “===== SHEET: … =====” ngăn cách từng bảng</option>
+                        <option value="column">Thêm cột Sheet ở đầu mỗi dòng (nối thành 1 bảng)</option>
+                    </select>
+                </label>
                 <label>Dấu phân cách CSV:
                     <select id="optSep">
                         <option value="," selected>Phẩy ( , )</option>
@@ -173,7 +180,7 @@
             <div class="hint">
                 ⚠️ <b>Lưu ý khi bấm “Tải tất cả”:</b> lần đầu trình duyệt sẽ hỏi <i>“Cho phép trang này tải xuống nhiều file không?”</i> — hãy chọn <b>Cho phép (Allow)</b>,
                 nếu không nó chỉ tải được 1 file đầu tiên. Cách gọn nhất là nút <b>“Lưu tất cả vào 1 thư mục”</b> (Chrome/Edge): chỉ chọn thư mục một lần,
-                tool tự tạo cây thư mục <code>CSV_Sheets</code>, <code>VBA_Code</code> và ghi toàn bộ file vào đó, không bị chặn tải nhiều file.
+                tool tự tạo thư mục kết quả và ghi toàn bộ file vào đó (file gộp nằm ở thư mục gốc; nếu bật xuất riêng từng sheet/module thì có thêm thư mục con <code>CSV_Sheets</code>, <code>VBA_Code</code>), không bị chặn tải nhiều file.
             </div>
         </div>
 
@@ -544,7 +551,7 @@
                         await writable.close();
                         log("-> Đã lưu: " + item.srcBase + "_KetQua/" + (item.folder ? item.folder + "/" : "") + item.fileName);
                     }
-                    finishProgress(true, "🎉 Đã lưu tất cả file vào thư mục đã chọn (không nén).", "Mở thư mục đã chọn để xem các thư mục con CSV_Sheets / VBA_Code.");
+                    finishProgress(true, "🎉 Đã lưu tất cả file vào thư mục đã chọn (không nén).", "Mở thư mục đã chọn để xem các file kết quả (gồm file CSV/TXT đã gộp và các file riêng nếu có bật).");
                     log("Lưu vào thư mục hoàn tất.", "success");
                 } catch (err) {
                     if (err && err.name === "AbortError") { log("Bạn đã hủy chọn thư mục.", "warn"); return; }
@@ -884,7 +891,7 @@
                     }
                 }
             
-                if (maxR < 0) return { text: "", rows: 0, cols: 0, cells: 0, ref: ws["!ref"] || "(không có)" };
+                if (maxR < 0) return { text: "", lines: [], rows: 0, cols: 0, cells: 0, ref: ws["!ref"] || "(không có)" };
             
                 const totalRows = maxR + 1, totalCols = maxC + 1;
                 const emptyLine = sep.repeat(maxC); // dong trong: du so dau phan cach
@@ -903,7 +910,41 @@
                         await nextFrame();
                     }
                 }
-                return { text: lines.join("\r\n") + "\r\n", rows: totalRows, cols: totalCols, cells: cellCount, ref: ws["!ref"] || "(không có)" };
+                return { text: lines.join("\r\n") + "\r\n", lines, rows: totalRows, cols: totalCols, cells: cellCount, ref: ws["!ref"] || "(không có)" };
+            }
+            
+            /* Gop CSV cua tat ca sheet thanh 1 file CSV duy nhat.
+               - mode "marker": chen dong "===== SHEET: <ten> =====" truoc du lieu moi sheet
+                 (giu nguyen tung bang nhu file CSV rieng, de doc/dan vao noi khac)
+               - mode "column": them cot "Sheet" o dau moi dong va noi cac sheet thanh
+                 mot bang CSV hinh chu nhat (mo Excel la mot bang lien tuc) */
+            async function buildCombinedCsv(parts, sep, mode, onProgress) {
+                if (mode === "column") {
+                    const maxCols = parts.reduce((m, part) => Math.max(m, part.cols || 0), 0);
+                    const outLines = [csvEscapeField("Sheet", sep) + sep.repeat(maxCols)];
+                    for (const part of parts) {
+                        const prefix = csvEscapeField(part.sheetName, sep);
+                        const padding = sep.repeat(Math.max(0, maxCols - (part.cols || 0)));
+                        if (!part.lines || !part.lines.length) {
+                            outLines.push(prefix + sep.repeat(maxCols));
+                            continue;
+                        }
+                        for (let li = 0; li < part.lines.length; li++) {
+                            outLines.push(prefix + sep + part.lines[li] + padding);
+                            if (li > 0 && li % 5000 === 0) {
+                                if (onProgress) await onProgress(part.sheetName, li, part.lines.length);
+                                await nextFrame();
+                            }
+                        }
+                    }
+                    return outLines.join("\r\n") + "\r\n";
+                }
+            
+                const sections = parts.map(part => {
+                    const body = (part.text || "").replace(/(\r\n|\n|\r)+$/, "");
+                    return "===== SHEET: " + part.sheetName + " =====\r\n" + body;
+                });
+                return sections.join("\r\n\r\n") + "\r\n";
             }
             
             /* =====================================================================
@@ -921,17 +962,22 @@
                 p(10, "Đã đọc xong file vào bộ nhớ");
                 logStep("Đọc file vào bộ nhớ", tStep);
             
-                /* ---- 1) Xuất Sheet -> CSV : 10% -> 45% ---- */
-                if ($("optCsv").checked) {
+                /* ---- 1) Xuất Sheet -> CSV (mac dinh: GOP tat ca sheet vao 1 file) : 10% -> 45% ---- */
+                const wantCsvEach = $("optCsv").checked;
+                const wantCsvAll = $("optCsvAll").checked;
+                if (wantCsvEach || wantCsvAll) {
                     try {
                         p(12, "Đang đọc workbook để xuất CSV");
-                        log("Đang đọc workbook và xuất các sheet ra CSV...");
+                        log("Đang đọc workbook và xuất CSV..." +
+                            (wantCsvAll ? " (sẽ gộp tất cả sheet vào 1 file CSV" + (wantCsvEach ? " + vẫn xuất riêng từng sheet)" : ")") : " (xuất riêng từng sheet)"));
                         await nextFrame(); // ve thanh % truoc khi XLSX.read (co the nang voi file lon)
                         tStep = performance.now();
                         const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: "array" });
                         log("Workbook có " + workbook.SheetNames.length + " sheet: " + workbook.SheetNames.join(", "));
                         const sep = $("optSep").value;
+                        const mergeMode = $("optCsvMergeMode").value;
                         const seenCsv = new Set();
+                        const csvParts = [];
                         for (let si = 0; si < workbook.SheetNames.length; si++) {
                             const sheetName = workbook.SheetNames[si];
                             p(15 + si / Math.max(1, workbook.SheetNames.length) * 30,
@@ -950,14 +996,38 @@
                             const csvText = csvInfo.text;
                             log("-> Sheet \"" + sheetName + "\": vùng !ref gốc " + csvInfo.ref +
                                 ", dữ liệu thật " + csvInfo.rows + " dòng x " + csvInfo.cols + " cột (" + csvInfo.cells + " ô có dữ liệu).");
-                            let fn = sanitizeFileName(sheetName) + ".csv";
-                            let n = 2;
-                            while (seenCsv.has(fn.toLowerCase())) fn = sanitizeFileName(sheetName) + "_" + (n++) + ".csv";
-                            seenCsv.add(fn.toLowerCase());
-                            // Thêm BOM UTF-8 để Excel mở không lỗi font tiếng Việt
-                            const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8" });
-                            addResult(baseName, "CSV_Sheets", fn, blob, "CSV", csvText);
-                            log("-> Đã xuất sheet \"" + sheetName + "\" -> CSV_Sheets/" + fn);
+                            if (wantCsvAll) {
+                                const part = { sheetName, cols: csvInfo.cols, rows: csvInfo.rows };
+                                if (mergeMode === "column") part.lines = csvInfo.lines;
+                                else part.text = csvText;
+                                csvParts.push(part);
+                            }
+                            if (wantCsvEach) {
+                                let fn = sanitizeFileName(sheetName) + ".csv";
+                                let n = 2;
+                                while (seenCsv.has(fn.toLowerCase())) fn = sanitizeFileName(sheetName) + "_" + (n++) + ".csv";
+                                seenCsv.add(fn.toLowerCase());
+                                // Thêm BOM UTF-8 để Excel mở không lỗi font tiếng Việt
+                                const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8" });
+                                addResult(baseName, "CSV_Sheets", fn, blob, "CSV", csvText);
+                                log("-> Đã xuất sheet \"" + sheetName + "\" -> CSV_Sheets/" + fn);
+                            }
+                        }
+            
+                        if (wantCsvAll) {
+                            p(43, "Đang gộp " + csvParts.length + " sheet vào 1 file CSV");
+                            log("Đang gộp " + csvParts.length + " sheet vào 1 file CSV (cách gộp: " +
+                                (mergeMode === "column" ? "thêm cột Sheet" : "chèn dòng ngăn cách tên sheet") + ")...");
+                            await nextFrame();
+                            const combinedCsvText = await buildCombinedCsv(csvParts, sep, mergeMode, async (sn, done, total) => {
+                                p(43 + done / Math.max(1, total) * 2, "Đang gộp CSV — sheet \"" + sn + "\": dòng " + done + "/" + total);
+                            });
+                            const combinedName = sanitizeFileName(baseName) + "_CSV_ALL.csv";
+                            addResult(baseName, "", combinedName,
+                                new Blob(["\uFEFF" + combinedCsvText], { type: "text/csv;charset=utf-8" }),
+                                "CSV-GỘP", combinedCsvText);
+                            log("-> Đã gộp tất cả sheet thành 1 file CSV duy nhất: " + combinedName +
+                                " (" + csvParts.length + " sheet)", "success");
                         }
                         p(45, "Đã xuất xong toàn bộ sheet ra CSV");
                         logStep("Xuất sheet ra CSV", tStep);
@@ -1017,9 +1087,10 @@
                                     "'============================================================\r\n" +
                                     m.code.replace(/\r?\n$/, "") + "\r\n"
                                 ).join("\r\n");
-                                addResult(baseName, "VBA_Code", "VBA_ALL_Code.txt",
+                                const vbaAllName = sanitizeFileName(baseName) + "_VBA_ALL.txt";
+                                addResult(baseName, "", vbaAllName,
                                     new Blob([all], { type: "text/plain;charset=utf-8" }), "VBA-ALL", all);
-                                log("-> Đã gộp " + modules.length + " module thành VBA_Code/VBA_ALL_Code.txt");
+                                log("-> Đã gộp tất cả " + modules.length + " module VBA thành 1 file TXT duy nhất: " + vbaAllName, "success");
                             }
                             log("Trích xuất VBA xong: " + modules.length + " module.", "success");
                         }
@@ -1152,7 +1223,7 @@
             });
         </script>
         <script>
-            (function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5010b1fbded0893',t:'MTc5MjkyOTQ0Mw=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();
+            (function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5011b8838318533',t:'MTc5MjkzMDExNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();
         </script>
     </body>
 
