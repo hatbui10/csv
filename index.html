@@ -159,6 +159,9 @@
                     </select>
                 </label>
             </div>
+            <p style="margin:8px 2px 0;font-size:13px;color:#555">💡 Các ô tick ở trên cũng là <b>công tắc hiện/ẩn file trong danh sách tải</b>:
+                sau khi xử lý xong, cứ <b>tick vào “riêng từng sheet” / “riêng từng module” là các file riêng hiện ra ngay</b> để tải, bỏ tick thì ẩn đi — không cần tải lại file lên.
+                Nút “Tải tất cả” / “Lưu vào thư mục” chỉ tải đúng các file <b>đang hiện</b>.</p>
 
             <div class="progress-wrap" id="progressWrap">
                 <div class="progress-head">
@@ -185,7 +188,7 @@
         </div>
 
         <div class="card">
-            <h3>📦 File kết quả (<span id="resultCount">0</span>)</h3>
+            <h3>📦 File kết quả (<span id="resultCount">0</span>)<span id="resultFilterInfo" style="font-size:13px;color:#888;font-weight:normal"></span></h3>
             <table>
                 <thead>
                     <tr>
@@ -397,7 +400,7 @@
             function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
             
             /* ------------------------- Danh sách kết quả ------------------------- */
-            function addResult(srcBase, folder, fileName, blob, kind, textForPreview) {
+            function addResult(srcBase, folder, fileName, blob, kind, textForPreview, group) {
                 // Chi giu toi da 60.000 ky tu de xem truoc (file Blob tai ve van day du).
                 // Giu toan bo text cua CSV/code lon trong bo nho la mot nguyen nhan lam treo trang.
                 let preview = null, previewTruncated = false;
@@ -405,25 +408,48 @@
                     previewTruncated = textForPreview.length > 60000;
                     preview = previewTruncated ? textForPreview.slice(0, 60000) : textForPreview;
                 }
-                results.push({ srcBase, folder, fileName: sanitizeFileName(fileName), blob, kind, text: preview, previewTruncated });
+                // group gan voi tung o tick de bam tick/bo tick la hien/an ngay trong danh sach:
+                // csvAll | csvEach | vbaAll | vbaEach | vbaAny (du phong) | unlock
+                results.push({ srcBase, folder, fileName: sanitizeFileName(fileName), blob, kind, group: group || "", text: preview, previewTruncated });
                 renderResults();
             }
+            /* File nao duoc hien trong danh sach tai, dua theo cac o tick hien tai */
+            function isResultVisible(item) {
+                switch (item.group) {
+                    case "csvAll":  return $("optCsvAll").checked;
+                    case "csvEach": return $("optCsv").checked;
+                    case "vbaAll":  return $("optVbaAll").checked;
+                    case "vbaEach": return $("optVba").checked;
+                    case "vbaAny":  return $("optVbaAll").checked || $("optVba").checked;
+                    case "unlock":  return $("optUnlock").checked;
+                    default:        return true;
+                }
+            }
+            function visibleResults() { return results.filter(isResultVisible); }
             function renderResults() {
                 const body = $("resultBody");
                 body.innerHTML = "";
-                $("resultCount").textContent = results.length;
-                $("btnDownloadAll").disabled = results.length === 0;
-                $("btnSaveFolder").disabled = results.length === 0;
+                const visible = visibleResults();
+                const hiddenCount = results.length - visible.length;
+                $("resultCount").textContent = visible.length;
+                const filterInfo = $("resultFilterInfo");
+                if (filterInfo) filterInfo.textContent = hiddenCount > 0
+                    ? " — đang ẩn " + hiddenCount + " file (tick thêm ô ở trên để hiện ra)"
+                    : "";
+                $("btnDownloadAll").disabled = visible.length === 0;
+                $("btnSaveFolder").disabled = visible.length === 0;
                 $("btnClear").disabled = results.length === 0;
-                if (!results.length) {
+                if (!visible.length) {
                     const tr = document.createElement("tr");
                     const td = document.createElement("td");
                     td.colSpan = 5; td.className = "empty";
-                    td.textContent = "Chưa có file nào — hãy tải lên file .xlsm ở trên.";
+                    td.textContent = results.length
+                        ? "Đã tạo " + results.length + " file nhưng đang bị ẩn hết do bỏ tick ở trên — hãy tick lại loại file muốn tải."
+                        : "Chưa có file nào — hãy tải lên file .xlsm ở trên.";
                     tr.appendChild(td); body.appendChild(tr);
                     return;
                 }
-                results.forEach((item, idx) => {
+                visible.forEach((item, idx) => {
                     const tr = document.createElement("tr");
             
                     const tdIdx = document.createElement("td"); tdIdx.textContent = idx + 1;
@@ -473,6 +499,40 @@
                 resetProgress("✅ Sẵn sàng. Hãy chọn file .xlsm.");
             };
             
+            /* Bam tick / bo tick: hien hoac an ngay loai file tuong ung trong danh sach
+               tai — khong can tai lai file len (cac ban gop + ban rieng deu da tao san
+               trong luc xu ly, o tick chi con la cong tac hien/an). */
+            const OPTION_GROUP_MAP = {
+                optCsvAll: { group: "csvAll",  label: "CSV gộp (1 file)" },
+                optCsv:    { group: "csvEach", label: "CSV riêng từng sheet" },
+                optVbaAll: { group: "vbaAll",  label: "TXT VBA gộp (1 file)" },
+                optVba:    { group: "vbaEach", label: "TXT riêng từng module VBA" },
+                optUnlock: { group: "unlock",  label: "XLSM đã mở khóa VBA" }
+            };
+            Object.keys(OPTION_GROUP_MAP).forEach((id) => {
+                const el = $(id);
+                if (!el) return;
+                el.addEventListener("change", () => {
+                    renderResults();
+                    if (!results.length) return; // chua xu ly file nao thi khong can thong bao
+                    const meta = OPTION_GROUP_MAP[id];
+                    const visibleNow = visibleResults().length;
+                    const groupCount = results.filter(item =>
+                        item.group === meta.group || (meta.group.startsWith("vba") && item.group === "vbaAny")).length;
+                    if (el.checked && groupCount === 0) {
+                        log("Đã tick “" + meta.label + "” nhưng lượt xử lý trước chưa tạo loại file này " +
+                            "(lúc tải file lên cả nhóm tùy chọn này đang tắt) — hãy tải lại file để tạo.", "warn");
+                        setProgressSub("⚠️ Loại “" + meta.label + "” chưa được tạo trong lượt trước — hãy tải lại file để tạo. Danh sách đang hiện " +
+                            visibleNow + "/" + results.length + " file.");
+                    } else {
+                        log("Đã " + (el.checked ? "HIỆN" : "ẨN") + " loại “" + meta.label + "” (" + groupCount +
+                            " file). Danh sách tải hiện đang hiện " + visibleNow + "/" + results.length + " file.");
+                        setProgressSub("Danh sách tải đang hiện " + visibleNow + "/" + results.length +
+                            " file — tick/bỏ tick các ô ở trên để hiện thêm hoặc ẩn bớt từng loại file.");
+                    }
+                });
+            });
+            
             /* ------------------------- Tải xuống (không nén) ------------------------- */
             function downloadOne(item, flatName) {
                 const url = URL.createObjectURL(item.blob);
@@ -484,11 +544,11 @@
                 a.remove();
                 setTimeout(() => URL.revokeObjectURL(url), 15000);
             }
-            function flatNamesForAll() {
+            function flatNamesForAll(items) {
                 // Khi tải phẳng vào thư mục Downloads sẽ không có thư mục con,
                 // nên nếu trùng tên file thì thêm tiền tố tên file gốc để tránh ghi đè.
                 const seen = new Map();
-                return results.map(item => {
+                return items.map(item => {
                     let name = item.fileName;
                     const key = name.toLowerCase();
                     if (seen.has(key)) {
@@ -505,25 +565,27 @@
                 });
             }
             $("btnDownloadAll").onclick = async () => {
-                if (!results.length) return;
-                const names = flatNamesForAll();
-                log("Bắt đầu tải tất cả " + results.length + " file (lần lượt từng file, không nén). " +
+                const items = visibleResults(); // chi tai cac file DANG HIEN (dung cac o tick)
+                if (!items.length) return;
+                const names = flatNamesForAll(items);
+                log("Bắt đầu tải " + items.length + " file đang hiện trong danh sách (lần lượt từng file, không nén). " +
                     "Nếu trình duyệt hỏi quyền tải nhiều file, hãy chọn Cho phép.", "warn");
                 $("btnDownloadAll").disabled = true;
-                for (let i = 0; i < results.length; i++) {
-                    setProgress(i / results.length * 100,
-                        "⬇️ Đang tải " + (i + 1) + "/" + results.length + " file...",
+                for (let i = 0; i < items.length; i++) {
+                    setProgress(i / items.length * 100,
+                        "⬇️ Đang tải " + (i + 1) + "/" + items.length + " file...",
                         "File hiện tại: " + names[i]);
-                    downloadOne(results[i], names[i]);
+                    downloadOne(items[i], names[i]);
                     log("-> Đã gửi lệnh tải: " + names[i]);
                     await sleep(500); // giãn cách để trình duyệt không chặn/nuốt lệnh tải
                 }
                 $("btnDownloadAll").disabled = false;
-                finishProgress(true, "🎉 Đã tải xong tất cả " + results.length + " file vào thư mục Downloads.", "Kiểm tra thư mục Downloads của bạn.");
-                log("Tải tất cả hoàn tất. Kiểm tra thư mục Downloads của bạn.", "success");
+                finishProgress(true, "🎉 Đã tải xong " + items.length + " file vào thư mục Downloads.", "Kiểm tra thư mục Downloads của bạn.");
+                log("Tải tất cả (các file đang hiện) hoàn tất. Kiểm tra thư mục Downloads của bạn.", "success");
             };
             $("btnSaveFolder").onclick = async () => {
-                if (!results.length) return;
+                const items = visibleResults(); // chi luu cac file DANG HIEN (dung cac o tick)
+                if (!items.length) return;
                 if (!window.showDirectoryPicker) {
                     alert("Trình duyệt này không hỗ trợ chọn thư mục (File System Access API).\n" +
                           "Hãy dùng Chrome hoặc Edge bản mới, hoặc dùng nút “Tải tất cả” thay thế.");
@@ -532,12 +594,12 @@
                 }
                 try {
                     const root = await window.showDirectoryPicker();
-                    log("Đang lưu " + results.length + " file vào thư mục đã chọn...");
+                    log("Đang lưu " + items.length + " file đang hiện trong danh sách vào thư mục đã chọn...");
                     let savedIdx = 0;
-                    for (const item of results) {
+                    for (const item of items) {
                         savedIdx++;
-                        setProgress((savedIdx - 1) / results.length * 100,
-                            "📁 Đang lưu " + savedIdx + "/" + results.length + " file vào thư mục...",
+                        setProgress((savedIdx - 1) / items.length * 100,
+                            "📁 Đang lưu " + savedIdx + "/" + items.length + " file vào thư mục...",
                             "File hiện tại: " + item.fileName);
                         let dir = await root.getDirectoryHandle(sanitizeFileName(item.srcBase) + "_KetQua", { create: true });
                         if (item.folder) {
@@ -968,8 +1030,7 @@
                 if (wantCsvEach || wantCsvAll) {
                     try {
                         p(12, "Đang đọc workbook để xuất CSV");
-                        log("Đang đọc workbook và xuất CSV..." +
-                            (wantCsvAll ? " (sẽ gộp tất cả sheet vào 1 file CSV" + (wantCsvEach ? " + vẫn xuất riêng từng sheet)" : ")") : " (xuất riêng từng sheet)"));
+                        log("Đang đọc workbook và xuất CSV... (tạo sẵn CẢ bản gộp 1 file lẫn bản riêng từng sheet — ô tick ở trên quyết định hiện loại nào trong danh sách tải)");
                         await nextFrame(); // ve thanh % truoc khi XLSX.read (co the nang voi file lon)
                         tStep = performance.now();
                         const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: "array" });
@@ -996,25 +1057,26 @@
                             const csvText = csvInfo.text;
                             log("-> Sheet \"" + sheetName + "\": vùng !ref gốc " + csvInfo.ref +
                                 ", dữ liệu thật " + csvInfo.rows + " dòng x " + csvInfo.cols + " cột (" + csvInfo.cells + " ô có dữ liệu).");
-                            if (wantCsvAll) {
+                            {
                                 const part = { sheetName, cols: csvInfo.cols, rows: csvInfo.rows };
                                 if (mergeMode === "column") part.lines = csvInfo.lines;
                                 else part.text = csvText;
                                 csvParts.push(part);
                             }
-                            if (wantCsvEach) {
+                            {
                                 let fn = sanitizeFileName(sheetName) + ".csv";
                                 let n = 2;
                                 while (seenCsv.has(fn.toLowerCase())) fn = sanitizeFileName(sheetName) + "_" + (n++) + ".csv";
                                 seenCsv.add(fn.toLowerCase());
                                 // Thêm BOM UTF-8 để Excel mở không lỗi font tiếng Việt
                                 const blob = new Blob(["\uFEFF" + csvText], { type: "text/csv;charset=utf-8" });
-                                addResult(baseName, "CSV_Sheets", fn, blob, "CSV", csvText);
-                                log("-> Đã xuất sheet \"" + sheetName + "\" -> CSV_Sheets/" + fn);
+                                addResult(baseName, "CSV_Sheets", fn, blob, "CSV", csvText, "csvEach");
+                                log("-> Đã tạo CSV riêng của sheet \"" + sheetName + "\" -> CSV_Sheets/" + fn +
+                                    ($("optCsv").checked ? "" : " (đang ẩn — tick “Xuất CSV riêng từng sheet” để hiện ra tải)"));
                             }
                         }
             
-                        if (wantCsvAll) {
+                        {
                             p(43, "Đang gộp " + csvParts.length + " sheet vào 1 file CSV");
                             log("Đang gộp " + csvParts.length + " sheet vào 1 file CSV (cách gộp: " +
                                 (mergeMode === "column" ? "thêm cột Sheet" : "chèn dòng ngăn cách tên sheet") + ")...");
@@ -1025,7 +1087,7 @@
                             const combinedName = sanitizeFileName(baseName) + "_CSV_ALL.csv";
                             addResult(baseName, "", combinedName,
                                 new Blob(["\uFEFF" + combinedCsvText], { type: "text/csv;charset=utf-8" }),
-                                "CSV-GỘP", combinedCsvText);
+                                "CSV-GỘP", combinedCsvText, "csvAll");
                             log("-> Đã gộp tất cả sheet thành 1 file CSV duy nhất: " + combinedName +
                                 " (" + csvParts.length + " sheet)", "success");
                         }
@@ -1072,15 +1134,18 @@
                             log("Không giải nén được module nào — dùng cách dự phòng quét chuỗi ký tự (có thể thiếu code).", "warn");
                             const rawText = extractVbaTextCrude(vbaBin);
                             addResult(baseName, "VBA_Code", "vba_code_raw.txt",
-                                new Blob([rawText], { type: "text/plain;charset=utf-8" }), "VBA-TXT", rawText);
+                                new Blob([rawText], { type: "text/plain;charset=utf-8" }), "VBA-TXT", rawText, "vbaAny");
                         } else {
-                            if ($("optVba").checked) {
+                            {
                                 for (const m of modules) {
                                     addResult(baseName, "VBA_Code", sanitizeFileName(m.name) + ".txt",
-                                        new Blob([m.code], { type: "text/plain;charset=utf-8" }), "VBA-TXT", m.code);
+                                        new Blob([m.code], { type: "text/plain;charset=utf-8" }), "VBA-TXT", m.code, "vbaEach");
+                                }
+                                if (!$("optVba").checked) {
+                                    log("-> Đã tạo sẵn " + modules.length + " file TXT riêng từng module (đang ẩn — tick “Xuất TXT riêng từng module VBA” để hiện ra tải).");
                                 }
                             }
-                            if ($("optVbaAll").checked) {
+                            {
                                 const all = modules.map(m =>
                                     "'============================================================\r\n" +
                                     "' MODULE: " + m.name + "\r\n" +
@@ -1089,7 +1154,7 @@
                                 ).join("\r\n");
                                 const vbaAllName = sanitizeFileName(baseName) + "_VBA_ALL.txt";
                                 addResult(baseName, "", vbaAllName,
-                                    new Blob([all], { type: "text/plain;charset=utf-8" }), "VBA-ALL", all);
+                                    new Blob([all], { type: "text/plain;charset=utf-8" }), "VBA-ALL", all, "vbaAll");
                                 log("-> Đã gộp tất cả " + modules.length + " module VBA thành 1 file TXT duy nhất: " + vbaAllName, "success");
                             }
                             log("Trích xuất VBA xong: " + modules.length + " module.", "success");
@@ -1129,7 +1194,7 @@
                                   "Đang ghi file XLSM đã mở khóa (" + Math.round(meta.percent || 0) + "% của bước này)");
                             });
                             const ext = (file.name.match(/\.[^/.]+$/) || [".xlsm"])[0];
-                            addResult(baseName, "", baseName + "_unlocked" + ext, unlockedBlob, "XLSM", null);
+                            addResult(baseName, "", baseName + "_unlocked" + ext, unlockedBlob, "XLSM", null, "unlock");
                             log("-> Đã tạo file: " + baseName + "_unlocked" + ext);
                             logStep("Tạo file XLSM đã mở khóa", tStep);
                         } catch (e) {
@@ -1177,17 +1242,21 @@
             
                 const secs = ((performance.now() - runStart) / 1000).toFixed(2);
                 const created = results.length - resultsBefore;
+                const visibleNow = visibleResults().length;
+                const hiddenNow = results.length - visibleNow;
+                const visibleNote = "Danh sách tải đang hiện " + visibleNow + "/" + results.length + " file" +
+                    (hiddenNow > 0 ? " — tick thêm các ô “riêng từng sheet/module” ở trên để hiện nốt " + hiddenNow + " file đang ẩn, không cần tải file lên lại." : ".");
                 if (created > 0 && runErrorCount === 0) {
                     finishProgress(true,
                         "🎉 Hoàn tất 100% trong " + secs + " giây! Tạo được " + created + " file kết quả.",
-                        "Bấm “Tải tất cả” hoặc “Lưu tất cả vào 1 thư mục” ở trên.");
-                    log("##### Lượt xử lý hoàn tất: tạo " + created + " file, 0 lỗi, hết " + secs + " giây. #####", "success");
+                        visibleNote + " Bấm “Tải tất cả” sẽ chỉ tải các file đang hiện.");
+                    log("##### Lượt xử lý hoàn tất: tạo " + created + " file (đang hiện " + visibleNow + ", đang ẩn " + hiddenNow + " theo ô tick), 0 lỗi, hết " + secs + " giây. #####", "success");
                 } else if (created > 0) {
                     setProgress(100,
                         "⚠️ Hoàn tất nhưng có " + runErrorCount + " lỗi (tạo được " + created + " file, hết " + secs + " giây).",
-                        "Các bước bị lỗi đã ghi rõ trong “Nhật ký xử lý” bên dưới — có nút “Tải file nhật ký (.txt)” để lưu/tải về xem.",
+                        visibleNote + " Các bước bị lỗi đã ghi rõ trong “Nhật ký xử lý” bên dưới.",
                         "warn");
-                    log("##### Lượt xử lý xong NHƯNG CÓ " + runErrorCount + " LỖI: tạo " + created + " file, hết " + secs + " giây. Hãy tìm các dòng ❌ trong nhật ký này. #####", "warn");
+                    log("##### Lượt xử lý xong NHƯNG CÓ " + runErrorCount + " LỖI: tạo " + created + " file (đang hiện " + visibleNow + "), hết " + secs + " giây. Hãy tìm các dòng ❌ trong nhật ký này. #####", "warn");
                 } else {
                     finishProgress(false,
                         "❌ Không tạo được file kết quả nào" + (runErrorCount ? " (" + runErrorCount + " lỗi)" : "") + " — hết " + secs + " giây.",
@@ -1223,7 +1292,7 @@
             });
         </script>
         <script>
-            (function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5011b8838318533',t:'MTc5MjkzMDExNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();
+            (function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a5012a6d0da0716a',t:'MTc5MjkzMDcyNQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();
         </script>
     </body>
 
